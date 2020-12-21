@@ -12,11 +12,8 @@ pub enum Event<T=String> {
     Remove(Vec<PathBuf>, T),
 }
 
-const DEFAULT_SYNC_IDLE: u64 = 500;
-
 #[derive(Debug)]
 pub struct Watcher<'a> {
-    idle: AtomicU64,
     target: &'a str,
     snapshot: RwLock<Vec<PathBuf>>,
     events: Mutex<Vec<Event>>,
@@ -56,7 +53,6 @@ impl<'a> Watcher<'a> {
     pub fn new(target: &'a str) -> Result<Self> {
         if PathBuf::from(target).is_absolute() {
             Ok(Watcher {
-                idle: AtomicU64::new(DEFAULT_SYNC_IDLE),
                 target,
                 snapshot: RwLock::new(ls!(target)),
                 events: Mutex::new(Vec::<Event>::new())
@@ -93,25 +89,6 @@ impl<'a> Watcher<'a> {
 
     }
 
-    pub fn keep_sync(&self) -> ! {
-        let idle: u64 = self.idle.load(Relaxed);
-
-        let modified_time = |path| PathBuf::from(path).metadata().unwrap().modified().unwrap();
-        let mut last = modified_time(self.target);
-
-        loop {
-            let current = modified_time(self.target);
-
-            if current == last {
-                continue
-            } else {
-                self.sync_once();
-                last = current;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(idle))
-        }
-    }
-
     #[inline(always)]
     pub fn get_snapshot(&self) -> Vec<PathBuf> {
         self.snapshot.read().unwrap().clone()
@@ -120,16 +97,6 @@ impl<'a> Watcher<'a> {
     #[inline(always)]
     pub fn get_events(&self) -> Vec<Event> {
         self.events.lock().unwrap().clone()
-    }
-
-    #[inline(always)]
-    pub fn get_idle(&self) -> u64 {
-        self.idle.load(Relaxed)
-    }
-
-    #[inline]
-    pub fn set_idle(&self, idle: u64) {
-        self.idle.store(idle, Relaxed);
     }
 
 }
