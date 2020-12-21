@@ -16,7 +16,7 @@ fn main() {
     loop {
         let current_length = watcher.get_snapshot().len();
         if current_length != previous_length {
-            println!("Number of entries at {}: {}", target, current_length);
+            println!("\nNumber of entries at {}: {}", target, current_length);
             previous_length = current_length;
             println!("Events from the beginning: {:#?}", watcher.get_events());
         }
