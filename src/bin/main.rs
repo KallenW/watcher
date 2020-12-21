@@ -2,16 +2,13 @@ use watcher::Watcher;
 use std::sync::Arc;
 use std::thread;
 
-
 fn main() {
 
-    let watcher = Arc::new(Watcher::new("/Users/tenx/Music/MyMusic").unwrap());
+    let watcher = Arc::new(Watcher::new(&std::env::args().skip(1).next().unwrap()).unwrap());
 
     let update_watcher = Arc::clone(&watcher);
 
-    let refreshing = thread::spawn(move || loop {
-        update_watcher.sync_once();
-    });
+    thread::spawn(move || update_watcher.keep_sync_with_idle(200));
 
     let mut previous_length = watcher.get_snapshot().len();
     println!("{}", previous_length);
