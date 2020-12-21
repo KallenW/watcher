@@ -3,7 +3,6 @@ use anyhow::{Result, bail};
 use std::path::PathBuf;
 use glob::glob;
 use std::sync::{RwLock, Mutex};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use Event::*;
 
 #[derive(Debug, Clone)]
@@ -13,8 +12,8 @@ pub enum Event<T=String> {
 }
 
 #[derive(Debug)]
-pub struct Watcher<'a> {
-    target: &'a str,
+pub struct Watcher {
+    target: String,
     snapshot: RwLock<Vec<PathBuf>>,
     events: Mutex<Vec<Event>>,
 }
@@ -47,13 +46,13 @@ macro_rules! record_events {
 
 }
 
-impl<'a> Watcher<'a> {
+impl Watcher {
 
     #[inline(always)]
-    pub fn new(target: &'a str) -> Result<Self> {
+    pub fn new(target: &str) -> Result<Self> {
         if PathBuf::from(target).is_absolute() {
             Ok(Watcher {
-                target,
+                target: target.to_owned(),
                 snapshot: RwLock::new(ls!(target)),
                 events: Mutex::new(Vec::<Event>::new())
             })
@@ -67,7 +66,7 @@ impl<'a> Watcher<'a> {
         let previous = self.snapshot.read().unwrap().clone(); // This unwrap will never panic
 
         if let Ok(mut latest) = self.snapshot.try_write() {
-            *latest = ls!(self.target);
+            *latest = ls!(self.target.as_str());
 
             record_events!(removed, &previous, latest);
             record_events!(added, latest.iter(), previous);
@@ -87,6 +86,13 @@ impl<'a> Watcher<'a> {
 
         }
 
+    }
+
+    pub fn keep_sync_with_idle(&self, idle_ms: u64) -> ! {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(idle_ms));
+            self.sync_once();
+        }
     }
 
     #[inline(always)]

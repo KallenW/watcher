@@ -1,0 +1,1 @@
+# `sync_all` for a directory
