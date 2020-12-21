@@ -8,7 +8,7 @@ fn main() {
 
     let update_watcher = Arc::clone(&watcher);
 
-    thread::spawn(move || update_watcher.keep_sync_with_idle(200));
+    thread::spawn(move || update_watcher.keep_sync_with_idle(None));
 
     let mut previous_length = watcher.get_snapshot().len();
     println!("{}", previous_length);

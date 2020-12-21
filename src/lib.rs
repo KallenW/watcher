@@ -5,6 +5,8 @@ use glob::glob;
 use std::sync::{RwLock, Mutex};
 use Event::*;
 
+const DEFAULT_SYNC_IDLE: u64 = 200;
+
 #[derive(Debug, Clone)]
 pub enum Event<T=String> {
     Add(Vec<PathBuf>, T),
@@ -43,7 +45,6 @@ macro_rules! record_events {
         }
 
     };
-
 }
 
 impl Watcher {
@@ -54,7 +55,7 @@ impl Watcher {
             Ok(Watcher {
                 target: target.to_owned(),
                 snapshot: RwLock::new(ls!(target)),
-                events: Mutex::new(Vec::<Event>::new())
+                events: Mutex::new(Vec::<Event>::new()),
             })
         } else {
             bail!("Watcher must be initialized with an absolute path!")
@@ -88,9 +89,13 @@ impl Watcher {
 
     }
 
-    pub fn keep_sync_with_idle(&self, idle_ms: u64) -> ! {
+    #[inline(always)]
+    pub fn keep_sync_with_idle(&self, idle_ms: Option<u64>) -> ! {
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(idle_ms));
+            // WE MUST HAVE AN IDLE HERE!
+            // Or it may lead to a performance problem about wasting too much CPU time
+            // when the update operation occurs only occasionally
+            std::thread::sleep(std::time::Duration::from_millis(idle_ms.unwrap_or(DEFAULT_SYNC_IDLE)));
             self.sync_once();
         }
     }
