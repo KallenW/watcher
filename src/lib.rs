@@ -8,14 +8,15 @@ use Event::*;
 const DEFAULT_SYNC_IDLE: u64 = 200;
 
 #[derive(Debug, Clone)]
-pub enum Event<T=String> {
-    Add(Vec<PathBuf>, T),
-    Remove(Vec<PathBuf>, T),
+pub enum Event<TIME=String> {
+    Add(Vec<PathBuf>, TIME),
+    Remove(Vec<PathBuf>, TIME),
 }
 
 #[derive(Debug)]
 pub struct Watcher {
-    target: String,
+    depth: u64,
+    pub target: String,
     snapshot: RwLock<Vec<PathBuf>>,
     events: Mutex<Vec<Event>>,
 }
@@ -27,10 +28,7 @@ fn now() -> String {
 
 macro_rules! ls {
     ($target: expr) => {
-        glob([$target, "*"].iter().collect::<PathBuf>().to_str().unwrap())
-            .unwrap()
-            .filter_map(Result::ok)
-            .collect::<Vec<_>>()
+        glob(&$target).unwrap().filter_map(Result::ok).collect::<Vec<_>>()
     };
 }
 
@@ -53,6 +51,7 @@ impl Watcher {
     pub fn new(target: &str) -> Result<Self> {
         if PathBuf::from(target).is_absolute() {
             Ok(Watcher {
+                depth: 1,
                 target: target.to_owned(),
                 snapshot: RwLock::new(ls!(target)),
                 events: Mutex::new(Vec::<Event>::new()),
@@ -60,6 +59,18 @@ impl Watcher {
         } else {
             bail!("Watcher must be initialized with an absolute path!")
         }
+    }
+
+    #[inline(always)]
+    pub fn depth(mut self, depth: u64) -> Self {
+        self.depth = depth;
+        let mut target = PathBuf::from(&self.target);
+        for _ in 0..depth {
+            target.push("*");
+        }
+        self.target = target.to_str().unwrap().to_owned();
+        self.snapshot = RwLock::new(ls!(&self.target));
+        self
     }
 
     pub fn sync_once(&self) {
@@ -92,7 +103,7 @@ impl Watcher {
     pub fn keep_sync_with_idle(&self, idle_ms: Option<u64>) -> ! {
         loop {
             // WE MUST HAVE AN IDLE HERE!
-            // Or it may lead to a performance problem about wasting too much CPU time
+            // Or it may lead to a performance problem because wasting too much CPU time
             // when the update operation occurs only occasionally
             std::thread::sleep(std::time::Duration::from_millis(idle_ms.unwrap_or(DEFAULT_SYNC_IDLE)));
             self.sync_once();
