@@ -5,7 +5,7 @@ mod error;
 
 use error::{Result, bail};
 use std::path::PathBuf;
-use std::sync::{RwLock, Mutex};
+use parking_lot::Mutex;
 use Event::*;
 
 const DEFAULT_SYNC_IDLE: u64 = 200;
@@ -20,7 +20,7 @@ pub enum Event<TIME=String> {
 pub struct Watcher {
     depth: u64,
     target: String,
-    snapshot: RwLock<Vec<PathBuf>>,
+    snapshot: Mutex<Vec<PathBuf>>,
     events: Mutex<Vec<Event>>,
 }
 
@@ -51,7 +51,7 @@ impl Watcher {
             Ok(Watcher {
                 depth: 1,
                 target: target.to_owned(),
-                snapshot: RwLock::new(ls!(target)),
+                snapshot: Mutex::new(ls!(target)),
                 events: Mutex::new(Vec::<Event>::new()),
             })
         } else {
@@ -63,7 +63,7 @@ impl Watcher {
     pub fn target(self, target: &str) -> Self {
         let mut watcher = self;
         watcher.target = target.to_owned();
-        watcher.snapshot = RwLock::new(ls!(target));
+        watcher.snapshot = Mutex::new(ls!(target));
         watcher
     }
 
@@ -76,28 +76,28 @@ impl Watcher {
             target.push("*");
         }
         watcher.target = target.to_str().unwrap().to_owned();
-        watcher.snapshot = RwLock::new(ls!(&watcher.target));
+        watcher.snapshot = Mutex::new(ls!(&watcher.target));
         watcher
     }
 
     pub fn sync_once(&self) {
 
-        let previous = self.snapshot.read().unwrap().clone(); // This unwrap is safe
+        let previous = self.snapshot.lock().clone(); // This unwrap is safe
 
-        if let Ok(mut latest) = self.snapshot.try_write() {
+        if let Some(mut latest) = self.snapshot.try_lock() {
             *latest = ls!(self.target.as_str());
 
             record_events!(removed, &previous, latest);
             record_events!(added, latest.iter(), previous);
 
             if !removed.is_empty() {
-                if let Ok(mut push_event) = self.events.try_lock() {
+                if let Some(mut push_event) = self.events.try_lock() {
                     push_event.push(Remove(removed, now()));
                 }
             }
 
             if !added.is_empty() {
-                if let Ok(mut push_event) = self.events.try_lock() {
+                if let Some(mut push_event) = self.events.try_lock() {
                     push_event.push(Add(added, now()));
                 }
             }
@@ -119,12 +119,12 @@ impl Watcher {
 
     #[inline(always)]
     pub fn get_snapshot(&self) -> Vec<PathBuf> {
-        self.snapshot.read().unwrap().clone()
+        self.snapshot.lock().clone()
     }
 
     #[inline(always)]
     pub fn get_events(&self) -> Vec<Event> {
-        self.events.lock().unwrap().clone()
+        self.events.lock().clone()
     }
 
     #[inline(always)]

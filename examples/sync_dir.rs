@@ -5,7 +5,7 @@ use std::thread;
 fn main() {
 
     let target = std::env::args().skip(1).next().unwrap();
-    let watcher = Arc::new(Watcher::new(&target).unwrap().depth(2));
+    let watcher = Arc::new(Watcher::new(&target).unwrap().depth(1));
 
     let update_watcher = Arc::clone(&watcher);
 
