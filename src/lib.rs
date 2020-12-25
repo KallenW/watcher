@@ -1,4 +1,7 @@
 //! Utility to sync directory
+#![forbid(unsafe_code)]
+#![warn(rust_2018_idioms)]
+
 #[macro_use]
 mod utils;
 mod error;
@@ -11,9 +14,9 @@ use Event::*;
 const DEFAULT_SYNC_IDLE: u64 = 200;
 
 #[derive(Debug, Clone)]
-pub enum Event<TIME=String> {
-    Add(Vec<PathBuf>, TIME),
-    Remove(Vec<PathBuf>, TIME),
+pub enum Event {
+    Add(Vec<PathBuf>),
+    Remove(Vec<PathBuf>),
 }
 
 #[derive(Debug)]
@@ -22,11 +25,6 @@ pub struct Watcher {
     target: String,
     snapshot: Mutex<Vec<PathBuf>>,
     events: Mutex<Vec<Event>>,
-}
-
-#[inline(always)]
-fn now() -> String {
-    chrono::Local::now().format("%Y-%m-%d_%H:%M:%S").to_string()
 }
 
 macro_rules! record_events {
@@ -59,7 +57,6 @@ impl Watcher {
         }
     }
 
-    #[inline(always)]
     pub fn target(self, target: &str) -> Self {
         let mut watcher = self;
         watcher.target = target.to_owned();
@@ -67,7 +64,6 @@ impl Watcher {
         watcher
     }
 
-    #[inline(always)]
     pub fn depth(self, depth: u64) -> Self {
         let mut watcher = self;
         watcher.depth = depth;
@@ -82,7 +78,7 @@ impl Watcher {
 
     pub fn sync_once(&self) {
 
-        let previous = self.snapshot.lock().clone(); // This unwrap is safe
+        let previous = self.snapshot.lock().clone();
 
         if let Some(mut latest) = self.snapshot.try_lock() {
             *latest = ls!(self.target.as_str());
@@ -92,13 +88,13 @@ impl Watcher {
 
             if !removed.is_empty() {
                 if let Some(mut push_event) = self.events.try_lock() {
-                    push_event.push(Remove(removed, now()));
+                    push_event.push(Remove(removed));
                 }
             }
 
             if !added.is_empty() {
                 if let Some(mut push_event) = self.events.try_lock() {
-                    push_event.push(Add(added, now()));
+                    push_event.push(Add(added));
                 }
             }
 
