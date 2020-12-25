@@ -1,35 +1,30 @@
 //! Utility to sync directory
-use anyhow::{Result, bail};
+#![forbid(unsafe_code)]
+#![warn(rust_2018_idioms)]
+
+#[macro_use]
+mod utils;
+mod error;
+
+use error::{Result, bail};
 use std::path::PathBuf;
-use glob::glob;
-use std::sync::{RwLock, Mutex};
+use parking_lot::Mutex;
 use Event::*;
 
 const DEFAULT_SYNC_IDLE: u64 = 200;
 
 #[derive(Debug, Clone)]
-pub enum Event<TIME=String> {
-    Add(Vec<PathBuf>, TIME),
-    Remove(Vec<PathBuf>, TIME),
+pub enum Event {
+    Add(Vec<PathBuf>),
+    Remove(Vec<PathBuf>),
 }
 
 #[derive(Debug)]
 pub struct Watcher {
     depth: u64,
-    pub target: String,
-    snapshot: RwLock<Vec<PathBuf>>,
+    target: String,
+    snapshot: Mutex<Vec<PathBuf>>,
     events: Mutex<Vec<Event>>,
-}
-
-#[inline(always)]
-fn now() -> String {
-    chrono::Local::now().format("%Y-%m-%d_%H:%M:%S").to_string()
-}
-
-macro_rules! ls {
-    ($target: expr) => {
-        glob(&$target).unwrap().filter_map(Result::ok).collect::<Vec<_>>()
-    };
 }
 
 macro_rules! record_events {
@@ -49,11 +44,12 @@ impl Watcher {
 
     #[inline(always)]
     pub fn new(target: &str) -> Result<Self> {
+        let dest = PathBuf::from(target);
         if PathBuf::from(target).is_absolute() {
             Ok(Watcher {
                 depth: 1,
                 target: target.to_owned(),
-                snapshot: RwLock::new(ls!(target)),
+                snapshot: Mutex::new(ls!(target)),
                 events: Mutex::new(Vec::<Event>::new()),
             })
         } else {
@@ -61,37 +57,44 @@ impl Watcher {
         }
     }
 
-    #[inline(always)]
-    pub fn depth(mut self, depth: u64) -> Self {
-        self.depth = depth;
-        let mut target = PathBuf::from(&self.target);
+    pub fn target(self, target: &str) -> Self {
+        let mut watcher = self;
+        watcher.target = target.to_owned();
+        watcher.snapshot = Mutex::new(ls!(target));
+        watcher
+    }
+
+    pub fn depth(self, depth: u64) -> Self {
+        let mut watcher = self;
+        watcher.depth = depth;
+        let mut target = PathBuf::from(&watcher.target);
         for _ in 0..depth {
             target.push("*");
         }
-        self.target = target.to_str().unwrap().to_owned();
-        self.snapshot = RwLock::new(ls!(&self.target));
-        self
+        watcher.target = target.to_str().unwrap().to_owned();
+        watcher.snapshot = Mutex::new(ls!(&watcher.target));
+        watcher
     }
 
     pub fn sync_once(&self) {
 
-        let previous = self.snapshot.read().unwrap().clone(); // This unwrap will never panic
+        let previous = self.snapshot.lock().clone();
 
-        if let Ok(mut latest) = self.snapshot.try_write() {
+        if let Some(mut latest) = self.snapshot.try_lock() {
             *latest = ls!(self.target.as_str());
 
             record_events!(removed, &previous, latest);
             record_events!(added, latest.iter(), previous);
 
             if !removed.is_empty() {
-                if let Ok(mut push_event) = self.events.try_lock() {
-                    push_event.push(Remove(removed, now()));
+                if let Some(mut push_event) = self.events.try_lock() {
+                    push_event.push(Remove(removed));
                 }
             }
 
             if !added.is_empty() {
-                if let Ok(mut push_event) = self.events.try_lock() {
-                    push_event.push(Add(added, now()));
+                if let Some(mut push_event) = self.events.try_lock() {
+                    push_event.push(Add(added));
                 }
             }
 
@@ -112,12 +115,22 @@ impl Watcher {
 
     #[inline(always)]
     pub fn get_snapshot(&self) -> Vec<PathBuf> {
-        self.snapshot.read().unwrap().clone()
+        self.snapshot.lock().clone()
     }
 
     #[inline(always)]
     pub fn get_events(&self) -> Vec<Event> {
-        self.events.lock().unwrap().clone()
+        self.events.lock().clone()
+    }
+
+    #[inline(always)]
+    pub fn get_target(&self) -> &str {
+        &self.target
+    }
+
+    #[inline(always)]
+    pub fn get_depth(&self) -> u64 {
+        self.depth
     }
 
 }
