@@ -1,7 +1,10 @@
 //! Utility to sync directory
-use anyhow::{Result, bail};
+#[macro_use]
+mod utils;
+mod error;
+
+use error::{Result, bail};
 use std::path::PathBuf;
-use glob::glob;
 use std::sync::{RwLock, Mutex};
 use Event::*;
 
@@ -16,7 +19,7 @@ pub enum Event<TIME=String> {
 #[derive(Debug)]
 pub struct Watcher {
     depth: u64,
-    pub target: String,
+    target: String,
     snapshot: RwLock<Vec<PathBuf>>,
     events: Mutex<Vec<Event>>,
 }
@@ -24,12 +27,6 @@ pub struct Watcher {
 #[inline(always)]
 fn now() -> String {
     chrono::Local::now().format("%Y-%m-%d_%H:%M:%S").to_string()
-}
-
-macro_rules! ls {
-    ($target: expr) => {
-        glob(&$target).unwrap().filter_map(Result::ok).collect::<Vec<_>>()
-    };
 }
 
 macro_rules! record_events {
@@ -49,6 +46,7 @@ impl Watcher {
 
     #[inline(always)]
     pub fn new(target: &str) -> Result<Self> {
+        let dest = PathBuf::from(target);
         if PathBuf::from(target).is_absolute() {
             Ok(Watcher {
                 depth: 1,
@@ -62,20 +60,29 @@ impl Watcher {
     }
 
     #[inline(always)]
-    pub fn depth(mut self, depth: u64) -> Self {
-        self.depth = depth;
-        let mut target = PathBuf::from(&self.target);
+    pub fn target(self, target: &str) -> Self {
+        let mut watcher = self;
+        watcher.target = target.to_owned();
+        watcher.snapshot = RwLock::new(ls!(target));
+        watcher
+    }
+
+    #[inline(always)]
+    pub fn depth(self, depth: u64) -> Self {
+        let mut watcher = self;
+        watcher.depth = depth;
+        let mut target = PathBuf::from(&watcher.target);
         for _ in 0..depth {
             target.push("*");
         }
-        self.target = target.to_str().unwrap().to_owned();
-        self.snapshot = RwLock::new(ls!(&self.target));
-        self
+        watcher.target = target.to_str().unwrap().to_owned();
+        watcher.snapshot = RwLock::new(ls!(&watcher.target));
+        watcher
     }
 
     pub fn sync_once(&self) {
 
-        let previous = self.snapshot.read().unwrap().clone(); // This unwrap will never panic
+        let previous = self.snapshot.read().unwrap().clone(); // This unwrap is safe
 
         if let Ok(mut latest) = self.snapshot.try_write() {
             *latest = ls!(self.target.as_str());
@@ -118,6 +125,16 @@ impl Watcher {
     #[inline(always)]
     pub fn get_events(&self) -> Vec<Event> {
         self.events.lock().unwrap().clone()
+    }
+
+    #[inline(always)]
+    pub fn get_target(&self) -> &str {
+        &self.target
+    }
+
+    #[inline(always)]
+    pub fn get_depth(&self) -> u64 {
+        self.depth
     }
 
 }
