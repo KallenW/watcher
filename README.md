@@ -1,5 +1,4 @@
-# `std::fs::File::sync_data()` for a directory
-
+# Utility to sync directory
 
 Add `watcher` to your `Cargo.toml`:
 ```toml
