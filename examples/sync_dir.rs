@@ -1,15 +1,10 @@
-use watcher::Watcher;
-use std::sync::Arc;
-use std::thread;
+use dir_watcher::DirWatcher;
 
 fn main() {
 
     let target = std::env::args().skip(1).next().unwrap();
-    let watcher = Arc::new(Watcher::new(&target).unwrap().depth(1));
-
-    let update_watcher = Arc::clone(&watcher);
-
-    thread::spawn(move || update_watcher.keep_sync_with_idle(None));
+    let watcher = DirWatcher::new(&target, "*");
+    watcher.keep_sync_with_idle(None);
 
     let mut previous_length = watcher.get_snapshot().len();
     let dest = watcher.get_target();
