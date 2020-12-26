@@ -112,26 +112,30 @@ impl __Watcher {
     fn sync_once(&self) {
 
         let previous = self.snapshot.lock().clone();
+        let mut sync = false;
+        while !sync {
+            if let Some(mut latest) = self.snapshot.try_lock() {
+                sync = true;
+                *latest = ls!(self.target.to_str().unwrap());
 
-        if let Some(mut latest) = self.snapshot.try_lock() {
-            *latest = ls!(self.target.to_str().unwrap());
+                record_events!(removed, &previous, latest);
+                record_events!(added, latest.iter(), previous);
 
-            record_events!(removed, &previous, latest);
-            record_events!(added, latest.iter(), previous);
-
-            if !removed.is_empty() {
-                if let Some(mut push_event) = self.events.try_lock() {
-                    push_event.push(Remove(removed));
+                if !removed.is_empty() {
+                    if let Some(mut push_event) = self.events.try_lock() {
+                        push_event.push(Remove(removed));
+                    }
                 }
-            }
 
-            if !added.is_empty() {
-                if let Some(mut push_event) = self.events.try_lock() {
-                    push_event.push(Add(added));
+                if !added.is_empty() {
+                    if let Some(mut push_event) = self.events.try_lock() {
+                        push_event.push(Add(added));
+                    }
                 }
-            }
 
+            }
         }
+
 
     }
 
