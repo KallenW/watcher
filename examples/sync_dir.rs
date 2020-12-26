@@ -3,7 +3,7 @@ use dir_watcher::DirWatcher;
 fn main() {
 
     let target = std::env::args().skip(1).next().unwrap();
-    let watcher = DirWatcher::new(&target);
+    let watcher = DirWatcher::new(&target, "*");
     watcher.keep_sync_with_idle(None);
 
     let mut previous_length = watcher.get_snapshot().len();

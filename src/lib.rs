@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-const DEFAULT_SYNC_IDLE: u64 = 200;
+const DEFAULT_SYNC_IDLE: u64 = 100;
 
 #[derive(Debug)]
 pub struct DirWatcher {
@@ -25,9 +25,9 @@ pub struct DirWatcher {
 impl DirWatcher {
 
     /// You can use [pattern in glob](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html) here
-    pub fn new(target: &str) -> Self {
+    pub fn new(target: &str, pattern: &str) -> Self {
         DirWatcher {
-            inner: Arc::new(__Watcher::new(target).unwrap())
+            inner: Arc::new(__Watcher::new(target, pattern).unwrap())
         }
     }
 
@@ -90,7 +90,7 @@ macro_rules! record_events {
 impl __Watcher {
 
     #[inline(always)]
-    fn new(target: &str) -> Result<Self> {
+    fn new(target: &str, pattern: &str) -> Result<Self> {
         let mut target = PathBuf::from(target);
 
         if !target.is_absolute() {
@@ -100,7 +100,7 @@ impl __Watcher {
         } else if !target.is_dir() {
             bail!("Watcher must be initialized with a directory!")
         } else {
-            target.push("*");
+            target.push(pattern);
             Ok(__Watcher {
                 target: target.clone(),
                 snapshot: Mutex::new(ls!(target.to_str().unwrap())),
