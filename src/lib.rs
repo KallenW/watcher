@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-const DEFAULT_SYNC_IDLE: u64 = 100;
+const DEFAULT_SYNC_IDLE: u64 = 1;
 
 #[derive(Debug)]
 pub struct DirWatcher {
@@ -140,12 +140,12 @@ impl __Watcher {
     }
 
     #[inline(always)]
-    fn keep_sync_with_idle(&self, idle_ms: Option<u64>) -> ! {
+    fn keep_sync_with_idle(&self, idle_ns: Option<u64>) -> ! {
         loop {
             // WE MUST HAVE AN IDLE HERE!
             // Or it may lead to a performance problem because wasting too much CPU time
             // when the update operation occurs only occasionally
-            std::thread::sleep(std::time::Duration::from_millis(idle_ms.unwrap_or(DEFAULT_SYNC_IDLE)));
+            std::thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
             self.sync_once();
         }
     }
