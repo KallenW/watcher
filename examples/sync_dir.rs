@@ -4,7 +4,7 @@ fn main() {
 
     let target = std::env::args().skip(1).next().unwrap();
     let watcher = DirWatcher::new(&target, "*");
-    watcher.keep_sync_with_idle(None);
+    watcher.keep_sync(None);
 
     let mut previous_length = watcher.get_snapshot().len();
     let dest = watcher.get_target();

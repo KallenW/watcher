@@ -31,11 +31,16 @@ impl DirWatcher {
         }
     }
 
+    /// Sync once for the current target
+    pub fn sync_once(&self) {
+        self.inner.sync_once();
+    }
+
     /// Spawn a new thread to watch the target directory
-    pub fn keep_sync_with_idle(&self, idle_ms: Option<u64>) -> JoinHandle<()> {
+    pub fn keep_sync(&self, idle_ns: Option<u64>) -> JoinHandle<()> {
         let update = Arc::clone(&self.inner);
         thread::spawn(move || {
-            update.keep_sync_with_idle(idle_ms);
+            update.keep_sync_with_idle(idle_ns);
         })
     }
 
@@ -75,14 +80,14 @@ struct __Watcher {
 }
 
 macro_rules! record_events {
-    ($records: ident, $previous: expr, $updated: expr) => {
+    ($records: ident, $previous: expr, $updated: expr, $events: expr, $operations: tt) => {
         let mut $records = vec![];
 
         for x in $previous {
-            if !$updated.contains(x) {
-                $records.push(x.clone());
-            }
+            if !$updated.contains(x) { $records.push(x.clone()); }
         }
+
+        if !$records.is_empty() { $events.push($operations($records)); }
 
     };
 }
@@ -101,49 +106,29 @@ impl __Watcher {
             bail!("Watcher must be initialized with a directory!")
         } else {
             target.push(pattern);
+            let snapshot = Mutex::new(ls!(target.to_str().unwrap()));
             Ok(__Watcher {
-                target: target.clone(),
-                snapshot: Mutex::new(ls!(target.to_str().unwrap())),
+                target,
+                snapshot,
                 events: Mutex::new(Vec::<Event>::new()),
             })
         }
     }
 
     fn sync_once(&self) {
-
-        let previous = self.snapshot.lock().clone();
-        let mut sync = false;
-        while !sync {
-            if let Some(mut latest) = self.snapshot.try_lock() {
-                sync = true;
-                *latest = ls!(self.target.to_str().unwrap());
-
-                record_events!(removed, &previous, latest);
-                record_events!(added, latest.iter(), previous);
-
-                if !removed.is_empty() {
-                    if let Some(mut push_event) = self.events.try_lock() {
-                        push_event.push(Remove(removed));
-                    }
-                }
-
-                if !added.is_empty() {
-                    if let Some(mut push_event) = self.events.try_lock() {
-                        push_event.push(Add(added));
-                    }
-                }
-
-            }
-        }
-
-
+        let mut snapshot = self.snapshot.lock();
+        let previous = snapshot.clone();
+        *snapshot = ls!(self.target.to_str().unwrap());
+        let mut events = self.events.lock();
+        record_events!(removed, &previous, snapshot, events, Remove);
+        record_events!(added, snapshot.iter(), previous, events, Add);
     }
 
     #[inline(always)]
     fn keep_sync_with_idle(&self, idle_ns: Option<u64>) -> ! {
         loop {
             // WE MUST HAVE AN IDLE HERE!
-            // Or it may lead to a performance problem because wasting too much CPU time
+            // Or it may lead to a performance problem because of wasting too much CPU time
             // when the update operation occurs only occasionally
             std::thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
             self.sync_once();
