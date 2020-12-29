@@ -16,12 +16,13 @@ use std::thread::{self, JoinHandle};
 use error::{anyhow, Result, InitDirWatcherError::*};
 
 const DEFAULT_SYNC_IDLE: u64 = 1;
+const ON_LOOP: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
 pub struct DirWatcher {
     #[doc(hidden)]
     inner: Arc<__Watcher>,
-    on_loop: Arc<AtomicBool>,
+    on_loop: bool,
     wthread: Option<JoinHandle<()>>,
 }
 
@@ -32,7 +33,7 @@ impl DirWatcher {
     pub fn new(target: &str, pattern: &str) -> Self {
         DirWatcher {
             inner: Arc::new(__Watcher::new(target, pattern).unwrap()),
-            on_loop: Arc::new(AtomicBool::new(false)),
+            on_loop: ON_LOOP.load(SeqCst),
             wthread: None,
         }
     }
@@ -45,15 +46,14 @@ impl DirWatcher {
 
     /// Spawn a new thread to watch the target directory
     pub fn watch_with_idle(&mut self, idle_ns: Option<u64>) {
-        self.on_loop.store(true, SeqCst);
+        ON_LOOP.store(true, SeqCst);
         let update = Arc::clone(&self.inner);
-        let on_loop = Arc::clone(&self.on_loop);
         self.wthread = Some(thread::spawn(move || {
             loop {
                 // WE MUST HAVE AN IDLE HERE!
                 // Or it may lead to a performance problem because of wasting too much CPU time
                 // when the update operation occurs only occasionally
-                if !on_loop.load(SeqCst) {
+                if ON_LOOP.load(SeqCst) {
                     thread::park();
                 }
                 std::thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
@@ -64,12 +64,12 @@ impl DirWatcher {
 
     #[inline(always)]
     pub fn pause(&self) {
-        self.on_loop.store(false, SeqCst);
+        ON_LOOP.store(false, SeqCst);
     }
 
     #[inline(always)]
     pub fn resume(&self) {
-        self.on_loop.store(true, SeqCst);
+        ON_LOOP.store(true, SeqCst);
         self.wthread.as_ref().unwrap().thread().unpark();
     }
 
@@ -94,7 +94,7 @@ impl DirWatcher {
 
     #[inline(always)]
     pub fn is_watching(&self) -> bool {
-        self.on_loop.load(SeqCst)
+        ON_LOOP.load(SeqCst)
     }
 
 }
