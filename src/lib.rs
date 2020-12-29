@@ -8,22 +8,23 @@ mod utils;
 mod error;
 
 use parking_lot::Mutex;
+use std::path::PathBuf;
+use std::thread::{self, JoinHandle};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst}};
+use error::{anyhow, Result, InitDirWatcherError::*};
 #[cfg(feature = "event")]
 use Event::*;
-use std::path::PathBuf;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst}};
-use std::thread::{self, JoinHandle};
-use error::{anyhow, Result, InitDirWatcherError::*};
 
 const DEFAULT_SYNC_IDLE: u64 = 1;
-const ON_LOOP: AtomicBool = AtomicBool::new(false);
+static ON_LOOP: AtomicBool = AtomicBool::new(false);
+type WatchingThread = Mutex<Option<JoinHandle<()>>>;
 
 #[derive(Debug)]
 pub struct DirWatcher {
     #[doc(hidden)]
     inner: Arc<__Watcher>,
     on_loop: bool,
-    wthread: Option<JoinHandle<()>>,
+    wthread: WatchingThread,
 }
 
 impl DirWatcher {
@@ -34,7 +35,7 @@ impl DirWatcher {
         DirWatcher {
             inner: Arc::new(__Watcher::new(target, pattern).unwrap()),
             on_loop: ON_LOOP.load(SeqCst),
-            wthread: None,
+            wthread: Mutex::new(None),
         }
     }
 
@@ -45,32 +46,35 @@ impl DirWatcher {
     }
 
     /// Spawn a new thread to watch the target directory
-    pub fn watch_with_idle(&mut self, idle_ns: Option<u64>) {
+    pub fn watch_with_idle(&self, idle_ns: Option<u64>) {
         ON_LOOP.store(true, SeqCst);
+        println!("from watch_with_idle: {}", self.is_watching());
         let update = Arc::clone(&self.inner);
-        self.wthread = Some(thread::spawn(move || {
+        *self.wthread.lock() = Some(thread::spawn(move || {
             loop {
                 // WE MUST HAVE AN IDLE HERE!
                 // Or it may lead to a performance problem because of wasting too much CPU time
                 // when the update operation occurs only occasionally
-                if ON_LOOP.load(SeqCst) {
+                if !ON_LOOP.load(SeqCst) {
                     thread::park();
                 }
-                std::thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
+                thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
                 update.sync_once();
             }
         }));
     }
 
+    /// Let a watcher pause the watching, pause a watcher which already paused will have no effect
     #[inline(always)]
     pub fn pause(&self) {
         ON_LOOP.store(false, SeqCst);
     }
 
+    /// Let a watcher resume the watching, use it on a watcher which is running will have no effect
     #[inline(always)]
     pub fn resume(&self) {
         ON_LOOP.store(true, SeqCst);
-        self.wthread.as_ref().unwrap().thread().unpark();
+        self.wthread.lock().as_ref().unwrap().thread().unpark();
     }
 
     /// Return a current snapshot of the target directory
@@ -92,6 +96,7 @@ impl DirWatcher {
         self.inner.get_target()
     }
 
+    /// Return the watching state
     #[inline(always)]
     pub fn is_watching(&self) -> bool {
         ON_LOOP.load(SeqCst)
@@ -153,6 +158,7 @@ impl __Watcher {
         let mut snapshot = self.snapshot.lock();
         #[cfg(feature = "event")]
         let previous = snapshot.clone();
+        // Update the snapshot
         *snapshot = ls!(self.target.to_str().unwrap());
         #[cfg(feature = "event")]
         {
