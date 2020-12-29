@@ -2,7 +2,7 @@
 
 Add `watcher` to your `Cargo.toml`:
 ```toml
-dir_watcher = { git = "https://github.com/TENX-S/watcher", branch = "main" }
+dir_watcher = { git = "https://github.com/TENX-S/dir_watcher", branch = "main" }
 ```
 ## Examples
 
