@@ -11,3 +11,11 @@ $ cargo run --release --example --features "event" /absolute/path/of/directory/y
 ```
 
 Then try to move or add entries at the directory you specified, it will print your operations
+
+### License
+
+This project is licensed under the MIT license.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in dir_watcher by you, shall be licensed as MIT, without any additional terms or conditions.
