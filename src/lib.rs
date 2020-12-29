@@ -22,7 +22,7 @@ type WatchingThread = Mutex<Option<JoinHandle<()>>>;
 #[derive(Debug)]
 pub struct DirWatcher {
     #[doc(hidden)]
-    inner: Arc<__Watcher>,
+    inner: Arc<_Watcher>,
     on_loop: bool,
     wthread: WatchingThread,
 }
@@ -31,9 +31,9 @@ impl DirWatcher {
 
     /// You can use [pattern in glob](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html) here
     #[inline(always)]
-    pub fn new(target: &str, pattern: &str) -> Self {
+    pub fn new(target: &str, pattern: &[&str]) -> Self {
         DirWatcher {
-            inner: Arc::new(__Watcher::new(target, pattern).unwrap()),
+            inner: Arc::new(_Watcher::new(target, pattern).unwrap()),
             on_loop: ON_LOOP.load(SeqCst),
             wthread: Mutex::new(None),
         }
@@ -46,9 +46,8 @@ impl DirWatcher {
     }
 
     /// Spawn a new thread to watch the target directory
-    pub fn watch_with_idle(&self, idle_ns: Option<u64>) {
+    pub fn watch_on_idle(&self, idle_ns: Option<u64>) {
         ON_LOOP.store(true, SeqCst);
-        println!("from watch_with_idle: {}", self.is_watching());
         let update = Arc::clone(&self.inner);
         *self.wthread.lock() = Some(thread::spawn(move || {
             loop {
@@ -79,7 +78,7 @@ impl DirWatcher {
 
     /// Return a current snapshot of the target directory
     #[inline(always)]
-    pub fn get_snapshot(&self) -> Vec<PathBuf> {
+    pub fn current(&self) -> Vec<PathBuf> {
         self.inner.get_snapshot()
     }
 
@@ -92,7 +91,7 @@ impl DirWatcher {
 
     /// Return the target of watcher
     #[inline(always)]
-    pub fn get_target(&self) -> &str {
+    pub fn get_target(&self) -> (&str, &[String]) {
         self.inner.get_target()
     }
 
@@ -112,15 +111,6 @@ pub enum Event {
     Remove(Vec<PathBuf>),
 }
 
-#[doc(hidden)]
-#[derive(Debug)]
-struct __Watcher {
-    target: PathBuf,
-    snapshot: Mutex<Vec<PathBuf>>,
-    #[cfg(feature = "event")]
-    events: Mutex<Vec<Event>>,
-}
-
 #[cfg(feature = "event")]
 macro_rules! record_events {
     ($records: ident, $previous: expr, $updated: expr, $events: expr, $operations: tt) => {
@@ -130,28 +120,25 @@ macro_rules! record_events {
     };
 }
 
-impl __Watcher {
+#[doc(hidden)]
+#[derive(Debug)]
+struct _Watcher {
+    target: _Target,
+    snapshot: Mutex<Vec<PathBuf>>,
+    #[cfg(feature = "event")]
+    events: Mutex<Vec<Event>>,
+}
+
+impl _Watcher {
 
     #[inline(always)]
-    fn new(target: &str, pattern: &str) -> Result<Self> {
-        let mut target = PathBuf::from(target);
-
-        if !target.is_absolute() {
-            Err(anyhow!(NonAbsPath))
-        } else if !target.exists() {
-            Err(anyhow!(InExistence))
-        } else if !target.is_dir() {
-            Err(anyhow!(NotADirectory))
-        } else {
-            target.push(pattern);
-            let snapshot = Mutex::new(ls!(target.to_str().unwrap()));
-            Ok(__Watcher {
-                target,
-                snapshot,
-                #[cfg(feature = "event")]
-                events: Mutex::new(Vec::<Event>::new()),
-            })
-        }
+    fn new(location: &str, pattern: &[&str]) -> Result<Self> {
+        Ok(_Watcher {
+            target: _Target::new(location, pattern)?,
+            snapshot: Mutex::new(ls!(PathBuf::from(location), pattern)),
+            #[cfg(feature = "event")]
+            events: Mutex::new(Vec::<Event>::new()),
+        })
     }
 
     fn sync_once(&self) {
@@ -159,7 +146,7 @@ impl __Watcher {
         #[cfg(feature = "event")]
         let previous = snapshot.clone();
         // Update the snapshot
-        *snapshot = ls!(self.target.to_str().unwrap());
+        *snapshot = ls!(self.target.location.clone(), &self.target.pattern);
         #[cfg(feature = "event")]
         {
             let mut events = self.events.lock();
@@ -180,8 +167,38 @@ impl __Watcher {
     }
 
     #[inline(always)]
-    fn get_target(&self) -> &str {
-        self.target.to_str().unwrap()
+    fn get_target(&self) -> (&str, &[String]) {
+        (self.target.location.to_str().unwrap(), &self.target.pattern)
+    }
+
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+struct _Target {
+    location: PathBuf,
+    pattern: Vec<String>,
+}
+
+impl _Target {
+
+    #[inline(always)]
+    fn new(location: &str, pattern: &[&str]) -> Result<Self> {
+        let location = PathBuf::from(location);
+        let mut pattern = pattern.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        sort_dedup!(pattern);
+        if !location.is_absolute() {
+            Err(anyhow!(NonAbsPath))
+        } else if !location.exists() {
+            Err(anyhow!(InExistence))
+        } else if !location.is_dir() {
+            Err(anyhow!(NotADirectory))
+        } else {
+            Ok(_Target {
+                location,
+                pattern,
+            })
+        }
     }
 
 }
