@@ -9,6 +9,14 @@ fn main() {
     let mut previous_length = watcher.current().len();
     let dest = watcher.get_target();
     println!("Number of entries of {} - {:?}: {}", dest.0, dest.1, previous_length);
+    println!("On watching: {}", DirWatcher::is_watching());
+    println!("Pause for 10 secs!");
+    watcher.pause();
+    println!("On watching: {}", DirWatcher::is_watching());
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    println!("Time up! Resume!");
+    watcher.resume();
+    println!("On watching: {}", DirWatcher::is_watching());
     loop {
         let current_length = watcher.current().len();
         if current_length != previous_length {

@@ -23,7 +23,6 @@ type WatchingThread = Mutex<Option<JoinHandle<()>>>;
 pub struct DirWatcher {
     #[doc(hidden)]
     inner: Arc<_Watcher>,
-    on_loop: bool,
     wthread: WatchingThread,
 }
 
@@ -34,7 +33,6 @@ impl DirWatcher {
     pub fn new(target: &str, pattern: &[&str]) -> Self {
         DirWatcher {
             inner: Arc::new(_Watcher::new(target, pattern).unwrap()),
-            on_loop: ON_LOOP.load(SeqCst),
             wthread: Mutex::new(None),
         }
     }
@@ -73,7 +71,9 @@ impl DirWatcher {
     #[inline(always)]
     pub fn resume(&self) {
         ON_LOOP.store(true, SeqCst);
-        self.wthread.lock().as_ref().unwrap().thread().unpark();
+        if let Some(wthread) = self.wthread.lock().as_ref() {
+            wthread.thread().unpark();
+        }
     }
 
     /// Return a current snapshot of the target directory
@@ -97,7 +97,7 @@ impl DirWatcher {
 
     /// Return the watching state
     #[inline(always)]
-    pub fn is_watching(&self) -> bool {
+    pub fn is_watching() -> bool {
         ON_LOOP.load(SeqCst)
     }
 
