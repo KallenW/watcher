@@ -16,13 +16,13 @@ use error::{anyhow, Result, InitDirWatcherError::*};
 use Event::*;
 
 const DEFAULT_SYNC_IDLE: u64 = 1;
-static ON_LOOP: AtomicBool = AtomicBool::new(false);
 type WatchingThread = Mutex<Option<JoinHandle<()>>>;
 
 #[derive(Debug)]
 pub struct DirWatcher {
     #[doc(hidden)]
     inner: Arc<_Watcher>,
+    on_loop: Arc<AtomicBool>,
     wthread: WatchingThread,
 }
 
@@ -33,6 +33,7 @@ impl DirWatcher {
     pub fn new(target: &str, pattern: &[&str]) -> Self {
         DirWatcher {
             inner: Arc::new(_Watcher::new(target, pattern).unwrap()),
+            on_loop: Arc::new(AtomicBool::new(false)),
             wthread: Mutex::new(None),
         }
     }
@@ -47,12 +48,13 @@ impl DirWatcher {
     pub fn watch_on_idle(&self, idle_ns: Option<u64>) {
         ON_LOOP.store(true, SeqCst);
         let update = Arc::clone(&self.inner);
+        let on_loop = Arc::clone(&self.on_loop);
         *self.wthread.lock() = Some(thread::spawn(move || {
             loop {
                 // WE MUST HAVE AN IDLE HERE!
                 // Or it may lead to a performance problem because of wasting too much CPU time
                 // when the update operation occurs only occasionally
-                if !ON_LOOP.load(SeqCst) {
+                if !on_loop.load(SeqCst) {
                     thread::park();
                 }
                 thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
@@ -64,13 +66,13 @@ impl DirWatcher {
     /// Let a watcher pause the watching, pause a watcher which already paused will have no effect
     #[inline(always)]
     pub fn pause(&self) {
-        ON_LOOP.store(false, SeqCst);
+        self.on_loop.store(false, SeqCst);
     }
 
     /// Let a watcher resume the watching, use it on a watcher which is running will have no effect
     #[inline(always)]
     pub fn resume(&self) {
-        ON_LOOP.store(true, SeqCst);
+        self.on_loop.store(true, SeqCst);
         if let Some(wthread) = self.wthread.lock().as_ref() {
             wthread.thread().unpark();
         }
@@ -97,8 +99,8 @@ impl DirWatcher {
 
     /// Return the watching state
     #[inline(always)]
-    pub fn is_watching() -> bool {
-        ON_LOOP.load(SeqCst)
+    pub fn is_watching(&self) -> bool {
+        self.on_loop.load(SeqCst)
     }
 
 }
