@@ -16,5 +16,5 @@ pub enum WatchingError {
     #[error("No running loop in the watcher")]
     NoRunningLoop,
     #[error("Making duplicate loops in a single watcher!")]
-    DuplicateLoop
+    DuplicateLoop,
 }

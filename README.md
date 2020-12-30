@@ -1,4 +1,5 @@
 # Utility to sync directory
+*This crate is not stable yet.*
 
 Add `dir_watcher` to your `Cargo.toml`:
 ```toml

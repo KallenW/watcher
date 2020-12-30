@@ -118,7 +118,7 @@ impl DirWatcher {
 
     /// Return a current snapshot of the target directory.
     #[inline(always)]
-    pub fn current(&self) -> Vec<PathBuf> {
+    pub fn get_snapshot(&self) -> Vec<PathBuf> {
         self.inner.get_snapshot()
     }
 
