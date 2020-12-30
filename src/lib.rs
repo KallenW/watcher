@@ -46,7 +46,7 @@ impl DirWatcher {
 
     /// Spawn a new thread to watch the target directory
     pub fn watch_on_idle(&self, idle_ns: Option<u64>) {
-        ON_LOOP.store(true, SeqCst);
+        self.on_loop.store(true, SeqCst);
         let update = Arc::clone(&self.inner);
         let on_loop = Arc::clone(&self.on_loop);
         *self.wthread.lock() = Some(thread::spawn(move || {
