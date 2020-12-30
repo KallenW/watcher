@@ -1,9 +1,14 @@
 # Utility to sync directory
 
-Add `watcher` to your `Cargo.toml`:
+Add `dir_watcher` to your `Cargo.toml`:
 ```toml
 dir_watcher = { git = "https://github.com/TENX-S/dir_watcher", branch = "main" }
 ```
+
+## Platform Support
+- **Windows**
+- **UNIX**
+
 ## Examples
 
 ```shell
