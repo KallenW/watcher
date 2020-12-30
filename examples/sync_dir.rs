@@ -1,10 +1,10 @@
 use dir_watcher::DirWatcher;
+use anyhow::Result;
 
-fn main() {
+fn main() -> Result<()> {
 
     let target = std::env::args().skip(1).next().unwrap();
-    let watcher = DirWatcher::new(&target, &["*.flac", "*.mp3", "*.txt"]);
-    watcher.watch_on_idle(None);
+    let watcher = DirWatcher::new(&target, &["*"]);
 
     let mut previous_length = watcher.current().len();
     let dest = watcher.get_target();

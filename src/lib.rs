@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst}};
-use error::{anyhow, Result, InitDirWatcherError::*};
+use error::{anyhow, Result, InitTargetError::*, WatchingError::*};
 #[cfg(feature = "event")]
 use Event::*;
 
@@ -28,7 +28,7 @@ pub struct DirWatcher {
 
 impl DirWatcher {
 
-    /// You can use [pattern in glob](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html) here
+    /// You can use [pattern in glob](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html) here.
     #[inline(always)]
     pub fn new(target: &str, pattern: &[&str]) -> Self {
         DirWatcher {
@@ -38,74 +38,106 @@ impl DirWatcher {
         }
     }
 
-    /// Sync once for the current target
+    /// Sync once for the current target.
     #[inline(always)]
     pub fn refresh(&self) {
         self.inner.sync_once();
     }
 
-    /// Spawn a new thread to watch the target directory
-    pub fn watch_on_idle(&self, idle_ns: Option<u64>) {
+    /// Spawn a new thread to start a loop to watch the target directory.
+    pub fn watch_on_idle(&self, idle_ns: Option<u64>) -> Result<()> {
         self.on_loop.store(true, SeqCst);
         let update = Arc::clone(&self.inner);
         let on_loop = Arc::clone(&self.on_loop);
-        *self.wthread.lock() = Some(thread::spawn(move || {
-            loop {
-                // WE MUST HAVE AN IDLE HERE!
-                // Or it may lead to a performance problem because of wasting too much CPU time
-                // when the update operation occurs only occasionally
-                if !on_loop.load(SeqCst) {
-                    thread::park();
+
+        let mut wthread = self.wthread.lock();
+
+        if wthread.is_none() {
+            *wthread = Some(thread::spawn(move || {
+                loop {
+                    // WE MUST HAVE AN IDLE HERE!
+                    // Or it may lead to a performance problem because of wasting too much CPU time
+                    // when the update operation occurs only occasionally
+                    if !on_loop.load(SeqCst) {
+                        thread::park();
+                    }
+                    thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
+                    update.sync_once();
                 }
-                thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
-                update.sync_once();
-            }
-        }));
-    }
-
-    /// Let a watcher pause the watching, pause a watcher which already paused will have no effect
-    #[inline(always)]
-    pub fn pause(&self) {
-        self.on_loop.store(false, SeqCst);
-    }
-
-    /// Let a watcher resume the watching, use it on a watcher which is running will have no effect
-    #[inline(always)]
-    pub fn resume(&self) {
-        self.on_loop.store(true, SeqCst);
-        if let Some(wthread) = self.wthread.lock().as_ref() {
-            wthread.thread().unpark();
+            }));
+            Ok(())
+        } else {
+            Err(anyhow!(DuplicateLoop))
         }
     }
 
-    /// Return a current snapshot of the target directory
+    /// Let a watcher pause the watching, pause a watcher which already paused will have no effect.
+    /// It will return an `Err` if a watcher doesn't have a running loop.
+    #[inline(always)]
+    pub fn pause(&self) -> Result<()> {
+        if self.wthread.lock().is_some() {
+            self.on_loop.store(false, SeqCst);
+            Ok(())
+        } else {
+            Err(anyhow!(NoRunningLoop))
+        }
+    }
+
+    /// Let a watcher resume the watching, use it on a watcher which is running will have no effect.
+    /// It will return an `Err` if a watcher doesn't have a running loop.
+    #[inline(always)]
+    pub fn resume(&self) -> Result<()> {
+        if let Some(wthread) = self.wthread.lock().as_ref() {
+            self.on_loop.store(true, SeqCst);
+            wthread.thread().unpark();
+            Ok(())
+        } else {
+            Err(anyhow!(NoRunningLoop))
+        }
+    }
+
+    /// End a watching of the watcher.
+    /// It will return an `Err` if a watcher doesn't have a running loop.
+    #[inline(always)]
+    pub fn end_watching(&self) -> Result<()> {
+        let mut wthread = self.wthread.lock();
+        if wthread.is_some() {
+            *wthread = None;
+            self.on_loop.store(false, SeqCst);
+            Ok(())
+        } else {
+            Err(anyhow!(NoRunningLoop))
+        }
+    }
+
+    /// Return the watching state.
+    #[inline(always)]
+    pub fn is_watching(&self) -> bool {
+        self.on_loop.load(SeqCst)
+    }
+
+    /// Return a current snapshot of the target directory.
     #[inline(always)]
     pub fn current(&self) -> Vec<PathBuf> {
         self.inner.get_snapshot()
     }
 
-    /// Return events From the very beginning of watcher
+    /// Return events From the very beginning of watcher.
     #[inline(always)]
     #[cfg(feature = "event")]
     pub fn get_events(&self) -> Vec<Event> {
         self.inner.get_events()
     }
 
-    /// Return the target of watcher
+    /// Return the target of watcher.
     #[inline(always)]
     pub fn get_target(&self) -> (&str, &[String]) {
         self.inner.get_target()
     }
 
-    /// Return the watching state
-    #[inline(always)]
-    pub fn is_watching(&self) -> bool {
-        self.on_loop.load(SeqCst)
-    }
-
 }
 
-/// Represents the operations that cause changes in the directory
+/// Represents the operations that cause changes in the directory.
 #[derive(Debug, Clone)]
 #[cfg(feature = "event")]
 pub enum Event {
@@ -147,7 +179,7 @@ impl _Watcher {
         let mut snapshot = self.snapshot.lock();
         #[cfg(feature = "event")]
         let previous = snapshot.clone();
-        // Update the snapshot
+        // Update the snapshot.
         *snapshot = ls!(self.target.location.clone(), &self.target.pattern);
         #[cfg(feature = "event")]
         {
