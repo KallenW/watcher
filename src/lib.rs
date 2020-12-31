@@ -9,13 +9,13 @@ mod error;
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
+use std::collections::HashSet;
 use std::thread::{self, JoinHandle};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst}};
 use error::{anyhow, Result, InitTargetError::*, WatchingError::*};
 #[cfg(feature = "event")]
 use Event::*;
 
-const DEFAULT_SYNC_IDLE: u64 = 1;
 type WatchingThread = Mutex<Option<JoinHandle<()>>>;
 
 #[derive(Debug)]
@@ -30,12 +30,12 @@ impl DirWatcher {
 
     /// You can use [pattern in glob](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html) here.
     #[inline(always)]
-    pub fn new(target: &str, pattern: &[&str]) -> Self {
-        DirWatcher {
-            inner: Arc::new(_Watcher::new(target, pattern).unwrap()),
+    pub fn new(target: &str, pattern: &[&str]) -> Result<Self> {
+        Ok(DirWatcher {
+            inner: Arc::new(_Watcher::new(target, pattern)?),
             on_loop: Arc::new(AtomicBool::new(false)),
             wthread: Mutex::new(None),
-        }
+        })
     }
 
     /// Sync once for the current target.
@@ -45,7 +45,7 @@ impl DirWatcher {
     }
 
     /// Spawn a new thread to start a loop to watch the target directory.
-    pub fn watch_on_idle(&self, idle_ns: Option<u64>) -> Result<()> {
+    pub fn loop_watch(&self) -> Result<()> {
         self.on_loop.store(true, SeqCst);
         let update = Arc::clone(&self.inner);
         let on_loop = Arc::clone(&self.on_loop);
@@ -61,7 +61,7 @@ impl DirWatcher {
                     if !on_loop.load(SeqCst) {
                         thread::park();
                     }
-                    thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
+                    thread::sleep(std::time::Duration::from_nanos(1));
                     update.sync_once();
                 }
             }));
@@ -118,7 +118,7 @@ impl DirWatcher {
 
     /// Return a current snapshot of the target directory.
     #[inline(always)]
-    pub fn get_snapshot(&self) -> Vec<PathBuf> {
+    pub fn get_snapshot(&self) -> HashSet<PathBuf> {
         self.inner.get_snapshot()
     }
 
@@ -131,7 +131,7 @@ impl DirWatcher {
 
     /// Return the target of watcher.
     #[inline(always)]
-    pub fn get_target(&self) -> (&str, &[String]) {
+    pub fn get_target(&self) -> (&PathBuf, &HashSet<String>) {
         self.inner.get_target()
     }
 
@@ -158,7 +158,7 @@ macro_rules! record_events {
 #[derive(Debug)]
 struct _Watcher {
     target: _Target,
-    snapshot: Mutex<Vec<PathBuf>>,
+    snapshot: Mutex<HashSet<PathBuf>>,
     #[cfg(feature = "event")]
     events: Mutex<Vec<Event>>,
 }
@@ -169,21 +169,17 @@ impl _Watcher {
     fn new(location: &str, pattern: &[&str]) -> Result<Self> {
         Ok(_Watcher {
             target: _Target::new(location, pattern)?,
-            snapshot: Mutex::new(ls!(PathBuf::from(location), pattern)),
+            snapshot: Mutex::new(ls!(location, pattern)),
             #[cfg(feature = "event")]
             events: Mutex::new(Vec::<Event>::new()),
         })
     }
 
-    // TODO: Try to use the HashSet to avoid sorting the snapshot
+    #[inline(always)]
     fn sync_once(&self) {
         let mut snapshot = self.snapshot.lock();
-
-        let mut previous = snapshot.clone();
-        previous.sort();
-
-        let mut current = ls!(self.target.location.clone(), &self.target.pattern);
-        current.sort();
+        let previous = snapshot.clone();
+        let current = ls!(&self.target.location, &self.target.pattern);
 
         if current != previous {
             *snapshot = current;
@@ -198,7 +194,7 @@ impl _Watcher {
     }
 
     #[inline(always)]
-    fn get_snapshot(&self) -> Vec<PathBuf> {
+    fn get_snapshot(&self) -> HashSet<PathBuf> {
         self.snapshot.lock().clone()
     }
 
@@ -209,8 +205,8 @@ impl _Watcher {
     }
 
     #[inline(always)]
-    fn get_target(&self) -> (&str, &[String]) {
-        (self.target.location.to_str().unwrap(), &self.target.pattern)
+    fn get_target(&self) -> (&PathBuf, &HashSet<String>) {
+        (&self.target.location, &self.target.pattern)
     }
 
 }
@@ -219,7 +215,7 @@ impl _Watcher {
 #[derive(Debug)]
 struct _Target {
     location: PathBuf,
-    pattern: Vec<String>,
+    pattern: HashSet<String>,
 }
 
 impl _Target {
@@ -227,18 +223,16 @@ impl _Target {
     #[inline(always)]
     fn new(location: &str, pattern: &[&str]) -> Result<Self> {
         let location = PathBuf::from(location);
-        let mut pattern = pattern.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        sort_dedup!(pattern);
         if !location.is_absolute() {
             Err(anyhow!(NonAbsPath))
         } else if !location.exists() {
-            Err(anyhow!(InExistence))
+            Err(anyhow!(NonExistent))
         } else if !location.is_dir() {
             Err(anyhow!(NotADirectory))
         } else {
             Ok(_Target {
                 location,
-                pattern,
+                pattern: pattern.iter().map(|&s| s.to_owned()).collect::<HashSet<_>>(),
             })
         }
     }

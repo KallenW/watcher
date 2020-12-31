@@ -6,7 +6,7 @@ pub enum InitTargetError {
     #[error("Watcher must be initialized with an absolute path!")]
     NonAbsPath,
     #[error("Watcher must be initialized with an existed path!")]
-    InExistence,
+    NonExistent,
     #[error("Watcher must be initialized with a directory!")]
     NotADirectory,
 }

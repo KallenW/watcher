@@ -1,26 +1,18 @@
-macro_rules! sort_dedup {
-    ($slice: expr) => {
-        $slice.sort();
-        $slice.dedup()
-    };
-}
-
 macro_rules! ls {
     ($location: expr, $pattern: expr) => {{
-        let mut entries = vec![];
+        let location = ::std::path::PathBuf::from($location);
+        let mut targets = vec![];
         for p in $pattern {
-            let mut temp = $location.clone();
+            let mut temp = location.clone();
             temp.push(p);
-            entries.push(temp);
+            targets.push(temp);
         }
 
-        let mut snapshot = vec![];
-
-        for e in entries {
-            snapshot.extend_from_slice(&::glob::glob(e.to_str().unwrap()).unwrap().filter_map(Result::ok).collect::<Vec<_>>());
+        let mut snapshots = HashSet::new();
+        for t in targets {
+            snapshots = snapshots.union(&::glob::glob(t.to_str().unwrap()).unwrap().filter_map(Result::ok).collect()).into_iter().cloned().collect();
         }
-        sort_dedup!(snapshot);
-        snapshot
+        snapshots
 
     }};
 }
