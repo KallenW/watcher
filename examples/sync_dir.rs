@@ -5,8 +5,8 @@ fn main() -> Result<()> {
 
     let target = std::env::args().skip(1).next().unwrap();
     let watcher = DirWatcher::new(&target, &["*"]);
-    watcher.watch_on_idle(None);
-    
+    watcher.watch_on_idle(None)?;
+
     let mut previous_length = watcher.get_snapshot().len();
     let dest = watcher.get_target();
     println!("Number of entries of {} - {:?}: {}", dest.0, dest.1, previous_length);

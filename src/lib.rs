@@ -175,18 +175,26 @@ impl _Watcher {
         })
     }
 
+    // TODO: Try to use the HashSet to avoid sorting the snapshot
     fn sync_once(&self) {
         let mut snapshot = self.snapshot.lock();
-        #[cfg(feature = "event")]
-        let previous = snapshot.clone();
-        // Update the snapshot.
-        *snapshot = ls!(self.target.location.clone(), &self.target.pattern);
-        #[cfg(feature = "event")]
-        {
-            let mut events = self.events.lock();
-            record_events!(removed, &previous, snapshot, events, Remove);
-            record_events!(added, snapshot.iter(), previous, events, Add);
+
+        let mut previous = snapshot.clone();
+        previous.sort();
+
+        let mut current = ls!(self.target.location.clone(), &self.target.pattern);
+        current.sort();
+
+        if current != previous {
+            *snapshot = current;
+            #[cfg(feature = "event")]
+            {
+                let mut events = self.events.lock();
+                record_events!(removed, &previous, snapshot, events, Remove);
+                record_events!(added, snapshot.iter(), previous, events, Add);
+            }
         }
+
     }
 
     #[inline(always)]
