@@ -7,162 +7,234 @@
 mod utils;
 mod error;
 
-use error::{Result, bail};
 use parking_lot::Mutex;
-use Event::*;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::HashSet;
 use std::thread::{self, JoinHandle};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst}};
+use error::{anyhow, Result, InitTargetError::*, WatchingError::*};
+#[cfg(feature = "event")]
+use Event::*;
 
-const DEFAULT_SYNC_IDLE: u64 = 1;
+type WatchingThread = Mutex<Option<JoinHandle<()>>>;
 
 #[derive(Debug)]
 pub struct DirWatcher {
     #[doc(hidden)]
-    inner: Arc<__Watcher>
+    inner: Arc<_Watcher>,
+    on_loop: Arc<AtomicBool>,
+    wthread: WatchingThread,
 }
 
 impl DirWatcher {
 
-    /// You can use [pattern in glob](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html) here
-    pub fn new(target: &str, pattern: &str) -> Self {
-        DirWatcher {
-            inner: Arc::new(__Watcher::new(target, pattern).unwrap())
-        }
-    }
-
-    /// Spawn a new thread to watch the target directory
-    pub fn keep_sync_with_idle(&self, idle_ms: Option<u64>) -> JoinHandle<()> {
-        let update = Arc::clone(&self.inner);
-        thread::spawn(move || {
-            update.keep_sync_with_idle(idle_ms);
+    /// You can use [pattern in glob](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html) here.
+    #[inline(always)]
+    pub fn new(target: &str, pattern: &[&str]) -> Result<Self> {
+        Ok(DirWatcher {
+            inner: Arc::new(_Watcher::new(target, pattern)?),
+            on_loop: Arc::new(AtomicBool::new(false)),
+            wthread: Mutex::new(None),
         })
     }
 
-    /// Return a current snapshot of the target directory
+    /// Sync once for the current target.
     #[inline(always)]
-    pub fn get_snapshot(&self) -> Vec<PathBuf> {
+    pub fn refresh(&self) {
+        self.inner.sync_once();
+    }
+
+    /// Spawn a new thread to start a loop to watch the target directory.
+    pub fn loop_watch(&self) -> Result<()> {
+        self.on_loop.store(true, SeqCst);
+        let update = Arc::clone(&self.inner);
+        let on_loop = Arc::clone(&self.on_loop);
+
+        let mut wthread = self.wthread.lock();
+
+        if wthread.is_none() {
+            *wthread = Some(thread::spawn(move || {
+                loop {
+                    // WE MUST HAVE AN IDLE HERE!
+                    // Or it may lead to a performance problem because of wasting too much CPU time
+                    // when the update operation occurs only occasionally
+                    if !on_loop.load(SeqCst) {
+                        thread::park();
+                    }
+                    thread::sleep(std::time::Duration::from_nanos(1));
+                    update.sync_once();
+                }
+            }));
+            Ok(())
+        } else {
+            Err(anyhow!(DuplicateLoop))
+        }
+    }
+
+    /// Let a watcher pause the watching, pause a watcher which already paused will have no effect.
+    /// It will return an `Err` if a watcher doesn't have a running loop.
+    #[inline(always)]
+    pub fn pause(&self) -> Result<()> {
+        if self.wthread.lock().is_some() {
+            self.on_loop.store(false, SeqCst);
+            Ok(())
+        } else {
+            Err(anyhow!(NoRunningLoop))
+        }
+    }
+
+    /// Let a watcher resume the watching, use it on a watcher which is running will have no effect.
+    /// It will return an `Err` if a watcher doesn't have a running loop.
+    #[inline(always)]
+    pub fn resume(&self) -> Result<()> {
+        if let Some(wthread) = self.wthread.lock().as_ref() {
+            self.on_loop.store(true, SeqCst);
+            wthread.thread().unpark();
+            Ok(())
+        } else {
+            Err(anyhow!(NoRunningLoop))
+        }
+    }
+
+    /// End a watching of the watcher.
+    /// It will return an `Err` if a watcher doesn't have a running loop.
+    #[inline(always)]
+    pub fn end_watching(&self) -> Result<()> {
+        let mut wthread = self.wthread.lock();
+        if wthread.is_some() {
+            *wthread = None;
+            self.on_loop.store(false, SeqCst);
+            Ok(())
+        } else {
+            Err(anyhow!(NoRunningLoop))
+        }
+    }
+
+    /// Return the watching state.
+    #[inline(always)]
+    pub fn is_watching(&self) -> bool {
+        self.on_loop.load(SeqCst)
+    }
+
+    /// Return a current snapshot of the target directory.
+    #[inline(always)]
+    pub fn get_snapshot(&self) -> HashSet<PathBuf> {
         self.inner.get_snapshot()
     }
 
-    /// Return events From the very beginning of watcher
+    /// Return events From the very beginning of watcher.
     #[inline(always)]
+    #[cfg(feature = "event")]
     pub fn get_events(&self) -> Vec<Event> {
         self.inner.get_events()
     }
 
-    /// Return the target of watcher
+    /// Return the target of watcher.
     #[inline(always)]
-    pub fn get_target(&self) -> &str {
+    pub fn get_target(&self) -> (&PathBuf, &HashSet<String>) {
         self.inner.get_target()
     }
 
 }
 
-/// Represents the operations that cause changes in the directory
+/// Represents the operations that cause changes in the directory.
 #[derive(Debug, Clone)]
+#[cfg(feature = "event")]
 pub enum Event {
     Add(Vec<PathBuf>),
     Remove(Vec<PathBuf>),
 }
 
-#[doc(hidden)]
-#[derive(Debug)]
-struct __Watcher {
-    target: PathBuf,
-    snapshot: Mutex<Vec<PathBuf>>,
-    events: Mutex<Vec<Event>>,
-}
-
+#[cfg(feature = "event")]
 macro_rules! record_events {
-    ($records: ident, $previous: expr, $updated: expr) => {
+    ($records: ident, $previous: expr, $updated: expr, $events: expr, $operations: tt) => {
         let mut $records = vec![];
-
-        for x in $previous {
-            if !$updated.contains(x) {
-                $records.push(x.clone());
-            }
-        }
-
+        for x in $previous { if !$updated.contains(x) { $records.push(x.clone()); } }
+        if !$records.is_empty() { $events.push($operations($records)); }
     };
 }
 
-impl __Watcher {
+#[doc(hidden)]
+#[derive(Debug)]
+struct _Watcher {
+    target: _Target,
+    snapshot: Mutex<HashSet<PathBuf>>,
+    #[cfg(feature = "event")]
+    events: Mutex<Vec<Event>>,
+}
+
+impl _Watcher {
 
     #[inline(always)]
-    fn new(target: &str, pattern: &str) -> Result<Self> {
-        let mut target = PathBuf::from(target);
-
-        if !target.is_absolute() {
-            bail!("Watcher must be initialized with an absolute path!")
-        } else if !target.exists() {
-            bail!("Watcher must be initialized with an existed path!")
-        } else if !target.is_dir() {
-            bail!("Watcher must be initialized with a directory!")
-        } else {
-            target.push(pattern);
-            Ok(__Watcher {
-                target: target.clone(),
-                snapshot: Mutex::new(ls!(target.to_str().unwrap())),
-                events: Mutex::new(Vec::<Event>::new()),
-            })
-        }
+    fn new(location: &str, pattern: &[&str]) -> Result<Self> {
+        Ok(_Watcher {
+            target: _Target::new(location, pattern)?,
+            snapshot: Mutex::new(ls!(location, pattern)),
+            #[cfg(feature = "event")]
+            events: Mutex::new(Vec::<Event>::new()),
+        })
     }
 
+    #[inline(always)]
     fn sync_once(&self) {
+        let mut snapshot = self.snapshot.lock();
+        let previous = snapshot.clone();
+        let current = ls!(&self.target.location, &self.target.pattern);
 
-        let previous = self.snapshot.lock().clone();
-        let mut sync = false;
-        while !sync {
-            if let Some(mut latest) = self.snapshot.try_lock() {
-                sync = true;
-                *latest = ls!(self.target.to_str().unwrap());
-
-                record_events!(removed, &previous, latest);
-                record_events!(added, latest.iter(), previous);
-
-                if !removed.is_empty() {
-                    if let Some(mut push_event) = self.events.try_lock() {
-                        push_event.push(Remove(removed));
-                    }
-                }
-
-                if !added.is_empty() {
-                    if let Some(mut push_event) = self.events.try_lock() {
-                        push_event.push(Add(added));
-                    }
-                }
-
+        if current != previous {
+            *snapshot = current;
+            #[cfg(feature = "event")]
+            {
+                let mut events = self.events.lock();
+                record_events!(removed, &previous, snapshot, events, Remove);
+                record_events!(added, snapshot.iter(), previous, events, Add);
             }
         }
 
-
     }
 
     #[inline(always)]
-    fn keep_sync_with_idle(&self, idle_ns: Option<u64>) -> ! {
-        loop {
-            // WE MUST HAVE AN IDLE HERE!
-            // Or it may lead to a performance problem because wasting too much CPU time
-            // when the update operation occurs only occasionally
-            std::thread::sleep(std::time::Duration::from_nanos(idle_ns.unwrap_or(DEFAULT_SYNC_IDLE)));
-            self.sync_once();
-        }
-    }
-
-    #[inline(always)]
-    fn get_snapshot(&self) -> Vec<PathBuf> {
+    fn get_snapshot(&self) -> HashSet<PathBuf> {
         self.snapshot.lock().clone()
     }
 
     #[inline(always)]
+    #[cfg(feature = "event")]
     fn get_events(&self) -> Vec<Event> {
         self.events.lock().clone()
     }
 
     #[inline(always)]
-    fn get_target(&self) -> &str {
-        self.target.to_str().unwrap()
+    fn get_target(&self) -> (&PathBuf, &HashSet<String>) {
+        (&self.target.location, &self.target.pattern)
+    }
+
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+struct _Target {
+    location: PathBuf,
+    pattern: HashSet<String>,
+}
+
+impl _Target {
+
+    #[inline(always)]
+    fn new(location: &str, pattern: &[&str]) -> Result<Self> {
+        let location = PathBuf::from(location);
+        if !location.is_absolute() {
+            Err(anyhow!(NonAbsPath))
+        } else if !location.exists() {
+            Err(anyhow!(NonExistent))
+        } else if !location.is_dir() {
+            Err(anyhow!(NotADirectory))
+        } else {
+            Ok(_Target {
+                location,
+                pattern: pattern.iter().map(|&s| s.to_owned()).collect::<HashSet<_>>(),
+            })
+        }
     }
 
 }
